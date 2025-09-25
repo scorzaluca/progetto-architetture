@@ -231,7 +231,7 @@ graph LR
     Client((OrderGen))
 
     subgraph Frontend
-        LB[LB - FastAPI proxy]
+        LB[LB — FastAPI proxy]
         GW1[Gateway #1]
         GW2[Gateway #2]
         GW3[Gateway #3]
@@ -246,7 +246,7 @@ graph LR
     end
 
     subgraph Data
-        KVF[KVFront - Coordinator]
+        KVF[KVFront — Coordinator]
         KVA[KVStore A]
         KVB[KVStore B]
         KVC[KVStore C]
@@ -258,27 +258,40 @@ graph LR
 
     %% Flussi esterni
     Client -->|HTTP REST| LB
-    LB -->|HTTP REST| GW1
-    LB -->|HTTP REST| GW2
-    LB -->|HTTP REST| GW3
+    LB -->|HTTP proxy → http://gateway:8000| GW1
+    LB -->|HTTP proxy → http://gateway:8000| GW2
+    LB -->|HTTP proxy → http://gateway:8000| GW3
 
-    %% Gateway <-> KV
-    GW1 -->|HTTP JSON| KVF
-    GW2 -->|HTTP JSON| KVF
-    GW3 -->|HTTP JSON| KVF
+    %% Gateway <-> KVFront
+    GW1 -->|HTTP JSON (GET/PUT/CAS)| KVF
+    GW2 -->|HTTP JSON (GET/PUT/CAS)| KVF
+    GW3 -->|HTTP JSON (GET/PUT/CAS)| KVF
 
-    %% Dispatcher
-    DISP -->|HTTP JSON CAS+GET| KVF
-    DISP -->|AMQP consume+publish| RMQ
+    %% Gateway <-> Broker
+    GW1 -->|AMQP publish: delivery_requests| RMQ
+    GW2 -->|AMQP publish: delivery_requests| RMQ
+    GW3 -->|AMQP publish: delivery_requests| RMQ
+    RMQ -->|AMQP consume: delivery_status| GW1
+    RMQ -->|AMQP consume: delivery_status| GW2
+    RMQ -->|AMQP consume: delivery_status| GW3
+
+    %% Dispatcher <-> KVFront
+    DISP -->|HTTP JSON (GET/PUT/CAS + /lock/acquire|release)| KVF
+
+    %% Dispatcher <-> Broker
+    RMQ -->|AMQP consume: delivery_requests| DISP
+    RMQ -->|AMQP consume: drone_updates| DISP
+    DISP -->|AMQP publish: delivery_status| RMQ
 
     %% Droni
-    DRONE -->|HTTP JSON CAS| KVF
-    DRONE -->|AMQP publish drone_updates| RMQ
+    DRONE -->|HTTP JSON (GET/PUT/CAS)| KVF
+    DRONE -->|AMQP publish: drone_updates| RMQ
 
     %% KVFront -> repliche
-    KVF --> KVA
-    KVF --> KVB
-    KVF --> KVC
+    KVF -->|HTTP JSON (replica-set, LWW, read-repair, hinted handoff)| KVA
+    KVF -->|HTTP JSON (replica-set, LWW, read-repair, hinted handoff)| KVB
+    KVF -->|HTTP JSON (replica-set, LWW, read-repair, hinted handoff)| KVC
+
 
 
 
@@ -323,7 +336,9 @@ graph TD
     DRONE --> RABBIT
     DISP --> RABBIT
 ```
-#### 3.6.3 Sequence Diagram (Richiesta di Consegna)
+#### 3.6.3 Sequence Diagram 
+
+#### (Flusso Event-Driven (con coda delivery_requests))
 
 ```mermaid
 sequenceDiagram
@@ -344,24 +359,14 @@ sequenceDiagram
     GW-->>LB: 201 Created (id)
     LB-->>Client: Response (id)
 
-    %% Assegnazione: due strade
-    alt Event-driven
-        RMQ-->>DISP: Consume delivery_requests
-        DISP->>KVF: Lock delivery & drone
-        DISP->>KVF: CAS drone idle→busy
-        DISP->>KVF: CAS delivery pending→assigned
-        DISP->>RMQ: Publish delivery_status: assigned
-    else Polling
-        loop Periodic tick
-            DISP->>KVF: Scan oldest_pending
-            DISP->>KVF: Lock delivery & drone
-            DISP->>KVF: CAS drone idle→busy
-            DISP->>KVF: CAS delivery pending→assigned
-            DISP->>RMQ: Publish delivery_status: assigned
-        end
-    end
+    %% Assegnazione tramite evento
+    RMQ-->>DISP: Consume delivery_requests
+    DISP->>KVF: Lock delivery & drone
+    DISP->>KVF: CAS drone idle→busy
+    DISP->>KVF: CAS delivery pending→assigned
+    DISP->>RMQ: Publish delivery_status: assigned
 
-    %% Avanzamento
+    %% Avanzamento stato
     DRN->>KVF: CAS update pos/battery
     DRN->>RMQ: Publish drone_updates
     RMQ-->>DISP: Consume drone_updates
@@ -369,6 +374,44 @@ sequenceDiagram
     DISP->>RMQ: Publish delivery_status: completed
 
 
+
+```
+
+#### Flusso Diretto (Polling Periodico assign_round)
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant LB as LB
+    participant GW as Gateway
+    participant KVF as KVFront
+    participant DISP as Dispatcher
+    participant DRN as Drone_sim
+    participant RMQ as RabbitMQ
+
+    %% Creazione delivery
+    Client->>LB: POST /deliveries
+    LB->>GW: Forward request
+    GW->>KVF: Store delivery in KV
+    KVF-->>GW: OK
+    GW-->>LB: 201 Created (id)
+    LB-->>Client: Response (id)
+
+    %% Assegnazione tramite polling
+    loop Periodic assign_round
+        DISP->>KVF: Scan oldest_pending
+        DISP->>KVF: Lock delivery & drone
+        DISP->>KVF: CAS drone idle→busy
+        DISP->>KVF: CAS delivery pending→assigned
+        DISP->>RMQ: Publish delivery_status: assigned
+    end
+
+    %% Avanzamento stato
+    DRN->>KVF: CAS update pos/battery
+    DRN->>RMQ: Publish drone_updates
+    RMQ-->>DISP: Consume drone_updates
+    DISP->>KVF: Advance delivery state
+    DISP->>RMQ: Publish delivery_status: completed
 ```
 
 
