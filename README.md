@@ -257,40 +257,41 @@ graph LR
     end
 
     %% Flussi esterni
-    Client -->|HTTP REST| LB
-    LB -->|HTTP proxy → http://gateway:8000| GW1
-    LB -->|HTTP proxy → http://gateway:8000| GW2
-    LB -->|HTTP proxy → http://gateway:8000| GW3
+    Client -->|"HTTP REST"| LB
+    LB -->|"HTTP proxy → http://gateway:8000"| GW1
+    LB -->|"HTTP proxy → http://gateway:8000"| GW2
+    LB -->|"HTTP proxy → http://gateway:8000"| GW3
 
     %% Gateway <-> KVFront
-    GW1 -->|HTTP JSON (GET/PUT/CAS)| KVF
-    GW2 -->|HTTP JSON (GET/PUT/CAS)| KVF
-    GW3 -->|HTTP JSON (GET/PUT/CAS)| KVF
+    GW1 -->|"HTTP JSON GET/PUT/CAS"| KVF
+    GW2 -->|"HTTP JSON GET/PUT/CAS"| KVF
+    GW3 -->|"HTTP JSON GET/PUT/CAS"| KVF
 
     %% Gateway <-> Broker
-    GW1 -->|AMQP publish: delivery_requests| RMQ
-    GW2 -->|AMQP publish: delivery_requests| RMQ
-    GW3 -->|AMQP publish: delivery_requests| RMQ
-    RMQ -->|AMQP consume: delivery_status| GW1
-    RMQ -->|AMQP consume: delivery_status| GW2
-    RMQ -->|AMQP consume: delivery_status| GW3
+    GW1 -->|"AMQP publish delivery_requests"| RMQ
+    GW2 -->|"AMQP publish delivery_requests"| RMQ
+    GW3 -->|"AMQP publish delivery_requests"| RMQ
+    RMQ -->|"AMQP consume delivery_status"| GW1
+    RMQ -->|"AMQP consume delivery_status"| GW2
+    RMQ -->|"AMQP consume delivery_status"| GW3
 
     %% Dispatcher <-> KVFront
-    DISP -->|HTTP JSON (GET/PUT/CAS + /lock/acquire|release)| KVF
+    DISP -->|"HTTP JSON GET/PUT/CAS + lock"| KVF
 
     %% Dispatcher <-> Broker
-    RMQ -->|AMQP consume: delivery_requests| DISP
-    RMQ -->|AMQP consume: drone_updates| DISP
-    DISP -->|AMQP publish: delivery_status| RMQ
+    RMQ -->|"AMQP consume delivery_requests"| DISP
+    RMQ -->|"AMQP consume drone_updates"| DISP
+    DISP -->|"AMQP publish delivery_status"| RMQ
 
     %% Droni
-    DRONE -->|HTTP JSON (GET/PUT/CAS)| KVF
-    DRONE -->|AMQP publish: drone_updates| RMQ
+    DRONE -->|"HTTP JSON GET/PUT/CAS"| KVF
+    DRONE -->|"AMQP publish drone_updates"| RMQ
 
     %% KVFront -> repliche
-    KVF -->|HTTP JSON (replica-set, LWW, read-repair, hinted handoff)| KVA
-    KVF -->|HTTP JSON (replica-set, LWW, read-repair, hinted handoff)| KVB
-    KVF -->|HTTP JSON (replica-set, LWW, read-repair, hinted handoff)| KVC
+    KVF -->|"HTTP JSON replication (RF=2, RR, HH)"| KVA
+    KVF -->|"HTTP JSON replication (RF=2, RR, HH)"| KVB
+    KVF -->|"HTTP JSON replication (RF=2, RR, HH)"| KVC
+
 
 
 
