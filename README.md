@@ -335,45 +335,39 @@ sequenceDiagram
     participant DISP as Dispatcher
     participant DRN as Drone_sim
 
-    %% Creazione delivery e persistenza
+    %% Creazione delivery
     Client->>LB: POST /deliveries
     LB->>GW: Forward request
-    GW->>KVF: PUT delivery:{id} (+ append deliveries_index)
+    GW->>KVF: Store delivery in KV
     KVF-->>GW: OK
-    GW->>RMQ: publish delivery_requests {delivery_id, ...}
-    GW-->>LB: 201 Created (delivery id)
+    GW->>RMQ: Publish delivery_requests
+    GW-->>LB: 201 Created (id)
     LB-->>Client: Response (id)
 
     %% Assegnazione: due strade
-    alt Event-driven (preferito)
-        RMQ-->>DISP: delivery_requests (delivery_id,...)
-        DISP->>KVF: lock delivery & drone
-        DISP->>KVF: CAS drone idle -> busy(current_delivery=id)
-        DISP->>KVF: CAS delivery pending -> assigned(drone_id)
-        DISP->>RMQ: publish delivery_status: assigned
-    else Fallback periodico (polling)
-        loop ogni ASSIGNER_TICK_MS
-            DISP->>KVF: scan oldest_pending()
-            DISP->>KVF: lock delivery & drone
-            DISP->>KVF: CAS drone idle -> busy(current_delivery=id)
-            DISP->>KVF: CAS delivery pending -> assigned(drone_id)
-            DISP->>RMQ: publish delivery_status: assigned
+    alt Event-driven
+        RMQ-->>DISP: Consume delivery_requests
+        DISP->>KVF: Lock delivery & drone
+        DISP->>KVF: CAS drone idle→busy
+        DISP->>KVF: CAS delivery pending→assigned
+        DISP->>RMQ: Publish delivery_status: assigned
+    else Polling
+        loop Periodic tick
+            DISP->>KVF: Scan oldest_pending
+            DISP->>KVF: Lock delivery & drone
+            DISP->>KVF: CAS drone idle→busy
+            DISP->>KVF: CAS delivery pending→assigned
+            DISP->>RMQ: Publish delivery_status: assigned
         end
     end
 
-    %% Avanzamento con telemetria
-    DRN->>KVF: CAS drone:{id} pos/battery/at_charge
-    RMQ-->>DISP: drone_updates (drone_id)
-    DISP->>KVF: advance_for_drone(drone_id) (assigned -> in_flight -> ...)
-    opt Avanzamento periodico (batch)
-        loop scheduler tick
-            DISP->>KVF: advance_deliveries()
-        end
-    end
+    %% Avanzamento
+    DRN->>KVF: CAS update pos/battery
+    DRN->>RMQ: Publish drone_updates
+    RMQ-->>DISP: Consume drone_updates
+    DISP->>KVF: Advance delivery state
+    DISP->>RMQ: Publish delivery_status: completed
 
-    %% Completamento
-    DISP->>KVF: CAS delivery -> delivered; drone busy -> idle
-    DISP->>RMQ: publish delivery_status: completed
 
 ```
 
