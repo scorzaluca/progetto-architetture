@@ -331,21 +331,49 @@ sequenceDiagram
     participant LB as LB
     participant GW as Gateway
     participant KVF as KVFront
+    participant RMQ as RabbitMQ
     participant DISP as Dispatcher
     participant DRN as Drone_sim
-    participant RMQ as RabbitMQ
 
+    %% Creazione delivery e persistenza
     Client->>LB: POST /deliveries
     LB->>GW: Forward request
-    GW->>KVF: Store delivery request
-    KVF-->>GW: ACK
-    GW-->>LB: ACK (201 Created)
-    LB-->>Client: Response (delivery ID)
+    GW->>KVF: PUT delivery:{id} (+ append deliveries_index)
+    KVF-->>GW: OK
+    GW->>RMQ: publish delivery_requests {delivery_id, ...}
+    GW-->>LB: 201 Created (delivery id)
+    LB-->>Client: Response (id)
 
-    DISP->>KVF: Poll for new deliveries
-    DISP->>RMQ: Send assignment
-    RMQ->>DRN: Deliver assignment event
-    DRN->>KVF: Update drone status/pos/battery
+    %% Assegnazione: due strade
+    alt Event-driven (preferito)
+        RMQ-->>DISP: delivery_requests (delivery_id,...)
+        DISP->>KVF: lock delivery & drone
+        DISP->>KVF: CAS drone idle -> busy(current_delivery=id)
+        DISP->>KVF: CAS delivery pending -> assigned(drone_id)
+        DISP->>RMQ: publish delivery_status: assigned
+    else Fallback periodico (polling)
+        loop ogni ASSIGNER_TICK_MS
+            DISP->>KVF: scan oldest_pending()
+            DISP->>KVF: lock delivery & drone
+            DISP->>KVF: CAS drone idle -> busy(current_delivery=id)
+            DISP->>KVF: CAS delivery pending -> assigned(drone_id)
+            DISP->>RMQ: publish delivery_status: assigned
+        end
+    end
+
+    %% Avanzamento con telemetria
+    DRN->>KVF: CAS drone:{id} pos/battery/at_charge
+    RMQ-->>DISP: drone_updates (drone_id)
+    DISP->>KVF: advance_for_drone(drone_id) (assigned -> in_flight -> ...)
+    opt Avanzamento periodico (batch)
+        loop scheduler tick
+            DISP->>KVF: advance_deliveries()
+        end
+    end
+
+    %% Completamento
+    DISP->>KVF: CAS delivery -> delivered; drone busy -> idle
+    DISP->>RMQ: publish delivery_status: completed
 
 ```
 
