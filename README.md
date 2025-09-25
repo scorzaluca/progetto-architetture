@@ -228,7 +228,7 @@ Questa sezione descrive **l’architettura reale** del sistema implementato: com
 
 ```mermaid
 graph LR
-    Client((Client / OrderGen))
+    Client((OrderGen))
 
     subgraph Frontend
         LB[LB - FastAPI proxy]
@@ -262,23 +262,24 @@ graph LR
     LB -->|HTTP REST| GW2
     LB -->|HTTP REST| GW3
 
-    %% Gateway e KV
-    GW1 -->|HTTP/JSON| KVF
-    GW2 -->|HTTP/JSON| KVF
-    GW3 -->|HTTP/JSON| KVF
+    %% Gateway <-> KV
+    GW1 -->|HTTP JSON| KVF
+    GW2 -->|HTTP JSON| KVF
+    GW3 -->|HTTP JSON| KVF
 
-    %% Dispatcher interazioni
-    DISP -->|HTTP/JSON (CAS, GET)| KVF
-    DISP -->|Consume/Produce AMQP| RMQ
+    %% Dispatcher
+    DISP -->|HTTP JSON CAS+GET| KVF
+    DISP -->|AMQP consume+publish| RMQ
 
-    %% Drone interazioni
-    DRONE -->|HTTP/JSON (CAS)| KVF
-    DRONE -->|Publish AMQP (drone_updates)| RMQ
+    %% Droni
+    DRONE -->|HTTP JSON CAS| KVF
+    DRONE -->|AMQP publish drone_updates| RMQ
 
-    %% KVFront e repliche
+    %% KVFront -> repliche
     KVF --> KVA
     KVF --> KVB
     KVF --> KVC
+
 
 
 ```
