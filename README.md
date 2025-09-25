@@ -228,42 +228,58 @@ Questa sezione descrive **l’architettura reale** del sistema implementato: com
 
 ```mermaid
 graph LR
-    Client((Client))
-    
-    subgraph Edge
-        LB[LB - FastAPI proxy]
-    end
+    Client((Client / OrderGen))
 
-    subgraph App
+    subgraph Frontend
+        LB[LB - FastAPI proxy]
         GW1[Gateway #1]
         GW2[Gateway #2]
         GW3[Gateway #3]
+    end
+
+    subgraph Control
         DISP[Dispatcher]
+    end
+
+    subgraph Simulation
         DRONE[Drone_sim]
     end
 
     subgraph Data
-        KVF[KVFront - RF/LWW/CAS/Locks]
-        KVA[KVStore A - SQLite+LRU]
-        KVB[KVStore B - SQLite+LRU]
-        KVC[KVStore C - SQLite+LRU]
+        KVF[KVFront - Coordinator]
+        KVA[KVStore A]
+        KVB[KVStore B]
+        KVC[KVStore C]
     end
 
     subgraph Broker
         RMQ[(RabbitMQ)]
     end
 
-    Client --> LB
-    LB --> GW1
-    LB --> GW2
-    LB --> GW3
-    GW1 --> KVF
-    GW2 --> KVF
-    GW3 --> KVF
-    DISP --> KVF
-    DRONE --> KVF
-    DRONE --> RMQ
-    DISP --> RMQ
+    %% Flussi esterni
+    Client -->|HTTP REST| LB
+    LB -->|HTTP REST| GW1
+    LB -->|HTTP REST| GW2
+    LB -->|HTTP REST| GW3
+
+    %% Gateway e KV
+    GW1 -->|HTTP/JSON| KVF
+    GW2 -->|HTTP/JSON| KVF
+    GW3 -->|HTTP/JSON| KVF
+
+    %% Dispatcher interazioni
+    DISP -->|HTTP/JSON (CAS, GET)| KVF
+    DISP -->|Consume/Produce AMQP| RMQ
+
+    %% Drone interazioni
+    DRONE -->|HTTP/JSON (CAS)| KVF
+    DRONE -->|Publish AMQP (drone_updates)| RMQ
+
+    %% KVFront e repliche
+    KVF --> KVA
+    KVF --> KVB
+    KVF --> KVC
+
 
 ```
 
