@@ -250,45 +250,39 @@ Il sistema è composto da più servizi containerizzati che collaborano per ricev
 
 ```mermaid
 graph LR
-  Client((Client))
-  subgraph Edge
-    LB[lb (FastAPI proxy)]
-  end
+    Client((Client))
+    
+    subgraph Edge
+        LB[LB - FastAPI proxy]
+    end
 
-  subgraph App
-    GW1[gateway #1]
-    GW2[gateway #2]
-    GW3[gateway #3]
-    DISP[dispatcher]
-    DRONESIM[drone_sim]
-  end
+    subgraph App
+        GW1[Gateway #1]
+        GW2[Gateway #2]
+        GW3[Gateway #3]
+        DISP[Dispatcher]
+        DRONE[Drone_sim]
+    end
 
-  subgraph Data
-    KVF[kvfront (RF, LWW, CAS, locks)]
-    KVA[kvstore_a (SQLite+LRU)]
-    KVB[kvstore_b (SQLite+LRU)]
-    KVC[kvstore_c (SQLite+LRU)]
-  end
+    subgraph Data
+        KVF[KVFront - RF/LWW/CAS/Locks]
+        KVA[KVStore A - SQLite+LRU]
+        KVB[KVStore B - SQLite+LRU]
+        KVC[KVStore C - SQLite+LRU]
+    end
 
-  subgraph Broker
-    RMQ[(RabbitMQ)]
-  end
+    subgraph Broker
+        RMQ[(RabbitMQ)]
+    end
 
-  Client -->|HTTP/JSON| LB
-  LB -->|HTTP/JSON| GW1
-  LB -->|HTTP/JSON| GW2
-  LB -->|HTTP/JSON| GW3
-
-  GW1 -->|HTTP| KVF
-  GW2 -->|HTTP| KVF
-  GW3 -->|HTTP| KVF
-
-  DISP -->|HTTP| KVF
-  DRONESIM -->|HTTP| KVF
-
-  KVF --> KVA
-  KVF --> KVB
-  KVF --> KVC
-
-  DRONESIM -->|AMQP: drone_updates| RMQ
-  DISP <--> |AMQP: delivery_requests, drone_updates, delivery_status| RMQ
+    Client --> LB
+    LB --> GW1
+    LB --> GW2
+    LB --> GW3
+    GW1 --> KVF
+    GW2 --> KVF
+    GW3 --> KVF
+    DISP --> KVF
+    DRONE --> KVF
+    DRONE --> RMQ
+    DISP --> RMQ
