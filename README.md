@@ -2,25 +2,7 @@
 
 > **Stato**: Proof of Concept funzionante, progettato per dimostrare architetture distribuite (microservizi, broker di messaggi, key-value store replicato, bilanciamento, consistenza, caching, container).
 
----
 
-## Indice
-1. [Analisi dei Requisiti](#1-analisi-dei-requisiti)  
-2. [Progettazione Architetturale](#2-progettazione-architetturale)  
-   2.1 [Componenti / Microservizi](#21-componenti--microservizi)  
-   2.2 [Interazioni e Protocolli](#22-interazioni-e-protocolli)  
-   2.3 [Motivazioni Tecnologiche](#23-motivazioni-tecnologiche)  
-   2.4 [Scalabilità, LB, Caching, Consistenza, Resilienza](#24-scalabilità-lb-caching-consistenza-resilienza)  
-   2.5 [Diagramma componenti](#25-diagramma-dei-componenti)  
-   2.6 [Diagramma di deployment](#26-diagramma-di-deployment)  
-   2.7 [Diagrammi di sequenza](#27-diagrammi-di-sequenza)  
-3. [Piano di Sviluppo (retrospettivo)](#3-piano-di-sviluppo-retrospettivo)  
-4. [Sviluppo del PoC: cosa è implementato](#4-sviluppo-del-poc-cosa-è-implementato)  
-5. [Test](#5-test)  
-6. [Guida al Deployment ed Esecuzione](#6-guida-al-deployment-ed-esecuzione)  
-7. [Evoluzioni Future](#7-evoluzioni-future)
-
----
 
 ## 1. Introduzione
 
@@ -112,33 +94,19 @@ Dal comportamento effettivo del sistema implementato, i requisiti funzionali pos
 
 ## 3. Progettazione Architetturale
 
-Questa sezione descrive **l’architettura reale** del sistema implementato: componenti (microservizi), responsabilità, interazioni (API/protocolli), motivazioni tecnologiche, e come sono stati affrontati i temi chiave dei sistemi distribuiti (scalabilità, bilanciamento, caching, consistenza, tolleranza ai guasti e resilienza). Includiamo anche diagrammi (in Mermaid) che riflettono **esattamente** ciò che c’è nei codici.
+Questa sezione descrive **l’architettura reale** del sistema implementato: componenti (microservizi), responsabilità, interazioni (API/protocolli), motivazioni tecnologiche, e come sono stati affrontati i temi chiave dei sistemi distribuiti (scalabilità, bilanciamento, caching, consistenza, tolleranza ai guasti e resilienza). Includiamo anche diagrammi che riflettono ciò che è stato realizzato nei codici.
 
 ---
 
-### 3.1 Panorama generale
 
-Il sistema è composto da più servizi containerizzati che collaborano per ricevere richieste di consegna, assegnarle a droni idonei e tracciare in tempo reale lo stato di droni e consegne.
 
-- **lb/** — *Simple Load Balancer (FastAPI)*: proxy HTTP verso `gateway`, con rate-limiter opzionale e retry idempotente.
-- **gateway/** — *API esterne*: espone REST per /deliveries, /zones, dashboard; dietro `lb`, può essere scalato a più repliche.
-- **kvfront/** — *Coordinatore KV*: sharding/replica RF, CAS lato front, read-repair, hinted handoff, lock distribuiti.
-- **kvstore/** (A/B/C) — *Storage KV replicato (SQLite + LRU cache)*: API /kv, /kv/cas, lock in-process; backing store per lo stato.
-- **dispatcher/** — *Orchestrazione*: scheduling/assegnazione, avanzamento stato consegne, autoscaling logico della flotta, consumer AMQP.
-- **drone_sim/** — *Simulatore droni*: registra la flotta, aggiorna posizione/batteria, pubblica eventi su RabbitMQ.
-- **rabbitmq** — *Broker AMQP*: code `delivery_requests`, `drone_updates`, `delivery_status`.
-- **tests/** — script di test end-to-end e SLO watch (passivo).
-- **docker-compose** — orchestrazione dei container e scaling del `gateway`.
-
----
-
-### 3.2 Componenti e responsabilità
+### 3.1 Componenti e responsabilità
 
 **lb (Simple LB)**
-- Proxy HTTP/1.1 keep-alive verso `gateway` (`TARGET_URL`).
-- **Rate limiting** globale e per-client (token bucket) opzionale via env.
+- Proxy HTTP/1.1 keep-alive verso `gateway` (`TARGET_URL`). 
+- **Rate limiting**: globale e per-client (token bucket) opzionale e configurabile via env.
 - Retry *best-effort* per richieste idempotenti (GET/HEAD/PUT/DELETE) e POST con `Idempotency-Key`.
-- Access log con timing per SLO passivo.
+- Access log: tiene traccia di tutte le richieste, così da poter misurare con i test le performance e verificare se il sistema rispetta gli obiettivi
 
 **gateway**
 - Espone **API REST** esterne (ad es. `/deliveries`, `/zones`, `/dashboard`).
@@ -147,69 +115,77 @@ Il sistema è composto da più servizi containerizzati che collaborano per ricev
 - La dashboard legge i dati dagli stessi endpoint REST (best-effort).
 
 **kvfront (coordinatore)**
-- **Replica set** per chiave (consistent hashing minimale): `replica_set(key)` su BACKENDS.
-- **RF configurabile** (tagliato a |BACKENDS|).
-- **LWW (Last-Write-Wins)**: `wrap(value)` con `_ts`, `unwrap(...)` per confronto temporale.
-- **Read path:** legge da tutte le repliche del set, sceglie la più recente, **read-repair** (C2).
-- **Write path:** tenta su tutte; se down → **hinted handoff** (C3) con flush periodico.
+- **Replica set**: per chiave (consistent hashing minimale)
+- **RF configurabile** (quante copie di ogni dato mantenere).
+- **LWW (Last-Write-Wins)**: se due versioni dello stesso dato arrivano da repliche diverse, vince quella col timestamp più recente.
+- **Read path**: legge da tutte le repliche del set, sceglie la più recente, e, se trova versioni vecchie fa un **read-repair** fa un read-repair per aggiornarle.
+- **Write path**: tenta su tutte le repliche; se down → **hinted handoff** con flush periodico.
 - **CAS distribuita**: CAS “logica” sul primario + replicazione best-effort su secondarie.
 - **Lock distribuito**: inoltro al primario per acquire/release.
 
 **kvstore (A/B/C)**
-- **Persistenza**: SQLite WAL + PRAGMA tuning.
-- **Cache LRU thread-safe** con limiti su item e byte.
-- **API**: `/kv/{key}`, `/kv/cas`, `/lock/*`, `/health`.
-- **CAS atomica locale** (transazione SQLite) con confronto **strutturale** JSON.
+- **Persistenza**: SQLite come database locale.
+- **Cache LRU** che conserva solo un numero limitato di elementi e byte
+- **Espone API HTTP per**:  
+  - leggere/scrivere valori (`/kv/{key}`)  
+  - fare operazioni CAS (`/kv/cas`)  
+  - gestire lock locali (`/lock/*`)  
+  - controllare lo stato di salute (`/health`)  
+- **CAS atomica locale**:confronta il valore attuale e lo aggiorna solo se non è cambiato.
 
-**dispatcher**
-- **Event-driven + periodic loop**:
-  - Consumer `delivery_requests` (assegnazione immediata).
-  - Consumer `drone_updates` (advance mirato).
-  - Loop periodico: `autoscale_by_type`, `govern_charging_and_retiring`, `advance_deliveries`, `assign_round`, `reconcile_stuck_busy`.
-- **Scheduling/assegnazione**:
-  - Selezione drone idoneo (`pick_drone`): classe peso, batteria, fattibilità energetica pos→origin→dest→charge, *bucket* distanza, *proximity rank* per zone.
-  - **Lock distribuiti** delivery/drone + **CAS doppi** (drone idle→busy; delivery pending→assigned) con rollback.
-- **Consistenza operativa**:
-  - Helper CAS robusti (idle↔busy) con retry e micro-backoff.
-  - Guard asimmetrie e “stuck busy”.
-- **Autoscaling logico** della flotta (stato `inactive/idle/charging/retiring`) per adeguare la capacità al backlog (non scala i container, ma **ottimizza** l’uso della flotta).
+**dispatcher**  
+- **Event-driven + periodic loop**:  
+  - Consumer `delivery_requests` (assegnazione immediata).  
+  - Consumer `drone_updates` (advance mirato).  
+  - Producer `delivery_status` (pubblica aggiornamenti sullo stato delle consegne).  
+  - Loop periodico: `autoscale_by_type`, `govern_charging_and_retiring`, `advance_deliveries`, `assign_round`, `reconcile_stuck_busy`.  
+- **Scheduling/assegnazione**:  
+  - Selezione drone idoneo (`pick_drone`): classe peso, batteria, fattibilità energetica pos→origin→dest→charge, *bucket* distanza, *proximity rank* per zone.  
+  - **Lock distribuiti** delivery/drone + **CAS doppi** (drone idle→busy; delivery pending→assigned) con rollback.  
+ 
+- **Autoscaling logico** della flotta**:  
+  - Gestione stati `inactive/idle/charging/retiring` per adeguare la capacità al backlog.  
+  - Non scala i container, ma **ottimizza** l’uso della flotta disponibile.  
+
 
 **drone_sim**
-- **Bootstrap flotta**: registra `n_total` droni (id, type: light/medium/heavy, speed frazionale).
+- **Bootstrap flotta**: registra `drone_pool_max` droni (id, type: light/medium/heavy, speed frazionale).
 - **Tick per-drone** (async):
   - Legge stato, calcola nuovo `pos/battery/at_charge`, scrive con **CAS + retry** (merge minimale).
   - Se “charging/retiring”: naviga verso `nearest_charge_point`, poi ricarica progressiva.
   - Enqueue eventi su `drone_updates` tramite **publisher dedicato** con backoff.
-- **Coordinamento con dispatcher**: rispetto `freeze_until` per evitare CAS “a rimbalzo”.
+
 
 **rabbitmq**
 - *Durable queues* per trigger e aggiornamenti: `delivery_requests`, `drone_updates`, `delivery_status`.
 
 ---
 
-### 3.3 Interazioni & protocolli
+### 3.2 Interazioni & protocolli
 
-**Protocolli**
-- **HTTP/JSON** tra `lb ↔ gateway` e `gateway/dispatcher/drone_sim ↔ kvfront/kvstore`.
-- **AMQP** (RabbitMQ) tra `drone_sim/producer` → `dispatcher/consumers` e (opzionalmente) publisher di richieste.
+**Protocolli**  
+- **HTTP**  
+  - tra `lb ↔ gateway`  
+  - tra `gateway/dispatcher/drone_sim ↔ kvfront/kvstore`  
 
-**Flussi principali**
-- **Richiesta consegna**: Client → **lb** → gateway (REST). Stato consegna in KV. Assegnazione:
-  - *immediata* se un publisher invia un evento su `delivery_requests` (dispatcher consumer),
-  - *oppure* nel **giro periodico** `assign_round` (fairness FIFO con `oldest_pending`).
-- **Aggiornamento drone**: `drone_sim` → KV (CAS) + evento `drone_updates` → dispatcher `advance_for_drone`.
+- **AMQP (RabbitMQ)**  
+  - `delivery_requests`: publisher (gateway) → consumer (dispatcher)  
+  - `drone_updates`: publisher (drone_sim) → consumer (dispatcher)  
+  - `delivery_status`: publisher (dispatcher) → consumer (gateway/dashboard)  
+
+
 
 ---
 
-### 3.4 Scelte tecnologiche (motivazioni)
+### 3.3 Scelte tecnologiche (motivazioni)
 
 - **Python + FastAPI** per servizi HTTP/REST (rapidità di sviluppo, async I/O, tipizzazione Pydantic dove serve).
 - **httpx** async per client HTTP (timeout chiari, pooling/keep-alive).
-- **aio-pika + RabbitMQ (AMQP)** per decoupling event-driven (robuste code durabili, QoS/prefetch).
-- **SQLite** nei `kvstore` (semplice, transazionale, veloce con WAL), incapsulato dietro un **KV API** coerente.
+- **aio-pika + RabbitMQ (AMQP)** per decoupling event-driven (robuste code durabili).
+- **SQLite** nei `kvstore` incapsulato dietro un **KV API** coerente.
 - **LRU cache** in-memory nei `kvstore` (riduzione latenza/carico DB).
 - **Docker** + `docker-compose` (riproducibilità, scaling del gateway, orchestrazione locale).
-- **CAS + lock**: meccanismi espliciti di **consistenza** a granularità di chiave, in puro user-space via API HTTP.
+- **CAS + lock**: meccanismi espliciti di **consistenza** sulla singola chiave interessata.
 
 ---
 
@@ -235,12 +211,14 @@ Il sistema è composto da più servizi containerizzati che collaborano per ricev
 
 - **Tolleranza ai guasti & resilienza**
   - `kvfront` tollera **repliche down** (hinted handoff) e ripara in lettura.
-  - Publisher eventi con **retry/backoff**; consumer con QoS (prefetch) e robust connect.
-  - Timeouts espliciti nelle chiamate HTTP, retry per CAS, rollback coerenti.
+  - Publisher eventi con **retry/backoff**;
+  
 
 - **Osservabilità**
-  - **Access log** nel `lb` con tempi ms → SLO passivo (`tests/slo_watch.sh`).
-  - Script di test end-to-end e smoke per ordergen (opzionale).
+  - **Access log** nel `lb` con tempi in millisecondi → monitoraggio passivo delle SLO (`tests/slo_watch.sh`).
+  - **Dashboard web** servita dal `gateway`: visualizza posizione, batteria e stato dei droni, oltre allo stato delle consegne.
+  - Script di test end-to-end.
+
 
 ---
 
@@ -353,3 +331,116 @@ sequenceDiagram
     DRN->>KVF: Update drone status/pos/battery
 
 ```
+
+
+## 4. Piano di Sviluppo
+
+Il percorso di sviluppo del Proof of Concept (PoC) è stato organizzato in **milestone incrementali**, ciascuna volta a introdurre un componente chiave e verificarne il corretto funzionamento all’interno del sistema distribuito.
+
+### 4.1 Milestone principali
+
+1. **Setup ambiente e orchestrazione base**
+   - Creazione dei `Dockerfile` per ciascun servizio.
+   - Configurazione di `docker-compose.yml` con servizi minimi (RabbitMQ, kvstore, kvfront).
+   - Test di avvio e comunicazione base tra i container.
+
+2. **Implementazione del Key-Value Store**
+   - Realizzazione di `kvstore` con persistenza in SQLite e cache LRU in-memory.
+   - Implementazione delle API REST `/kv`, `/kv/cas`, `/lock/*`.
+   - Introduzione di CAS atomica locale e gestione lock in-process.
+   - Test funzionale delle operazioni base di scrittura/lettura.
+
+3. **Introduzione del Coordinatore KV (kvfront)**
+   - Aggiunta della logica di replica (RF), LWW (Last-Write-Wins).
+   - Gestione di read-repair e hinted handoff.
+   - CAS distribuita e lock forwarding.
+   - Validazione con più istanze di `kvstore`.
+
+4. **Implementazione del gateway API**
+   - Esposizione delle API REST esterne (`/deliveries`, `/zones`, `/dashboard`).
+   - Integrazione con `kvfront` per stato consegne e droni.
+   - Verifica tramite chiamate HTTP dirette e dashboard statica.
+
+5. **Load Balancer**
+   - Implementazione di `lb` come proxy FastAPI verso `gateway`.
+   - Introduzione di rate-limiting e retry per richieste idempotenti.
+   - Scalabilità del gateway (`--scale gateway=3`) testata tramite Compose.
+
+6. **Simulatore dei droni (drone_sim)**
+   - Registrazione iniziale della flotta di droni.
+   - Loop asincrono per aggiornamento posizione/batteria e invio eventi RabbitMQ.
+   - Gestione CAS + retry sugli aggiornamenti per consistenza.
+
+7. **Dispatcher (orchestratore)**
+   - Consumo eventi `delivery_requests` e `drone_updates`.
+   - Algoritmi di scheduling: selezione del drone in base a batteria, distanza, capacità.
+   - Avanzamento stato consegne e autoscaling logico della flotta.
+   - Integrazione con lock distribuiti e CAS doppi per consistenza.
+
+8. **Test end-to-end e osservabilità**
+   - Script `tests/` per verificare la correttezza dei flussi.
+   - `slo_watch.sh` per osservabilità passiva di SLO (latenza media assegnazione e consegna).
+   - Validazione finale con flotta simulata e traffico generato.
+
+### 4.2 Strategia seguita
+Il piano ha seguito un approccio **incrementale e modulare**:
+- Prima la costruzione del **substrato dati** (KV store + coordinatore).  
+- Poi le **API e l’accesso esterno** (gateway + load balancer).  
+- Successivamente la **simulazione della flotta** e l’**orchestrazione delle consegne** (drone_sim + dispatcher).  
+- Infine i **test di sistema** e la **dashboard** per osservabilità.  
+
+Questo ha permesso di validare ogni componente separatamente e poi integrarlo gradualmente nel sistema distribuito.
+
+---
+
+
+
+## 5. Sviluppo del Proof of Concept (PoC)
+
+Il Proof of Concept realizzato implementa in modo funzionante e verificabile i requisiti minimi previsti dalla traccia.  
+
+### 5.1 Funzionalità implementate
+
+- **Registrazione dei droni simulati**
+  - Il servizio `drone_sim` registra automaticamente una flotta di droni all’avvio (`drone:ID` e `drones_index` nel KV).
+  - Ogni drone ha attributi: `id`, `type` (light/medium/heavy), `battery`, `pos`, `status`, `speed`.
+
+- **Ricezione richieste di consegna**
+  - Il servizio `gateway` espone un endpoint REST `/deliveries` che permette l’inserimento di nuove consegne.
+  - Le richieste vengono salvate nel `kvfront` e propagate ai `kvstore`.
+
+- **Algoritmo di assegnazione**
+  - Il `dispatcher` riceve eventi (`delivery_requests`, `drone_updates`) e decide quale drone assegnare in base a:
+    - idoneità per peso pacco,
+    - livello di batteria sufficiente per la missione,
+    - distanza da origine/destinazione.
+  - Assegnazione realizzata con **lock distribuiti** e **CAS doppi** per garantire consistenza tra stato drone e stato consegna.
+
+- **Simulazione aggiornamenti droni**
+  - Ogni drone aggiorna periodicamente posizione e batteria con step frazionali (fluido sulla dashboard).
+  - Stato salvato in KV con **CAS + retry** per evitare sovrascritture concorrenti.
+  - Eventi su `drone_updates` vengono pubblicati su RabbitMQ e consumati dal `dispatcher`.
+
+- **Tracciamento stato consegne**
+  - Le consegne passano da `pending` → `assigned` → `in-progress` → `delivered`.
+  - Lo stato è mantenuto nel KV store, leggibile via API.
+
+- **Endpoint per stato droni e consegne**
+  - Il `gateway` espone API REST per consultare lo stato corrente (sia droni che consegne).
+  - La **dashboard web** legge questi endpoint e visualizza i dati su mappa e tabella.
+
+### 5.2 Tecnologie del PoC
+Il PoC integra tecnologie e concetti studiati a lezione:
+- **API REST** (FastAPI, HTTP/JSON).
+- **Sistemi a broker** (RabbitMQ, code AMQP per richieste ed eventi).
+- **Key-Value store distribuito** (replica e coordinamento KV con consistency best-effort).
+- **Container e orchestrazione** (`Docker`, `docker-compose`, scaling del gateway).
+- **Meccanismi di consistenza** (CAS, lock distribuiti).
+- **Bilanciamento del carico** (`lb` con round-robin e rate-limiter opzionale).
+
+### 5.3 Risultato
+Il PoC dimostra un **sistema distribuito funzionante** in cui:
+- I droni vengono gestiti e monitorati in tempo reale.
+- Le consegne vengono ricevute, assegnate e tracciate correttamente.
+- Tutte le interazioni avvengono tramite interfacce standard (API REST, AMQP).
+- L’architettura è containerizzata, scalabile e osservabile tramite dashboard e script di test.
