@@ -293,7 +293,7 @@ graph LR
 
 
 #### 3.6.2 Deployment Diagram
-```markdown
+
 ```mermaid
 graph TD
     subgraph Host [Docker Compose Host]
@@ -329,7 +329,7 @@ graph TD
     DISP --> RABBIT
 ```
 #### 3.6.3 Sequence Diagram (Richiesta di Consegna)
-```markdown
+
 ```mermaid
 sequenceDiagram
     participant Client
