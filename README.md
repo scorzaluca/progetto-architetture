@@ -286,3 +286,70 @@ graph LR
     DRONE --> KVF
     DRONE --> RMQ
     DISP --> RMQ
+
+```
+
+---
+
+
+#### 3.6.2 Deployment Diagram
+```markdown
+```mermaid
+graph TD
+    subgraph Host [Docker Compose Host]
+        subgraph Containers
+            RABBIT[(RabbitMQ Container)]
+            KVF[KVFront Container]
+            KVA[KVStore A Container]
+            KVB[KVStore B Container]
+            KVC[KVStore C Container]
+            GW1[Gateway #1 Container]
+            GW2[Gateway #2 Container]
+            GW3[Gateway #3 Container]
+            LB[Load Balancer Container]
+            DISP[Dispatcher Container]
+            DRONE[Drone_sim Container]
+            ORDERGEN[OrderGen Container]
+        end
+    end
+
+    ORDERGEN --> LB
+    LB --> GW1
+    LB --> GW2
+    LB --> GW3
+    GW1 --> KVF
+    GW2 --> KVF
+    GW3 --> KVF
+    KVF --> KVA
+    KVF --> KVB
+    KVF --> KVC
+    DISP --> KVF
+    DRONE --> KVF
+    DRONE --> RABBIT
+    DISP --> RABBIT
+```
+#### 3.6.3 Sequence Diagram (Richiesta di Consegna)
+```markdown
+```mermaid
+sequenceDiagram
+    participant Client
+    participant LB as LB
+    participant GW as Gateway
+    participant KVF as KVFront
+    participant DISP as Dispatcher
+    participant DRN as Drone_sim
+    participant RMQ as RabbitMQ
+
+    Client->>LB: POST /deliveries
+    LB->>GW: Forward request
+    GW->>KVF: Store delivery request
+    KVF-->>GW: ACK
+    GW-->>LB: ACK (201 Created)
+    LB-->>Client: Response (delivery ID)
+
+    DISP->>KVF: Poll for new deliveries
+    DISP->>RMQ: Send assignment
+    RMQ->>DRN: Deliver assignment event
+    DRN->>KVF: Update drone status/pos/battery
+
+```
