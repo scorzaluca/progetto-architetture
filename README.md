@@ -322,20 +322,42 @@ graph TD
         end
     end
 
-    ORDERGEN --> LB
-    LB --> GW1
-    LB --> GW2
-    LB --> GW3
-    GW1 --> KVF
-    GW2 --> KVF
-    GW3 --> KVF
-    KVF --> KVA
-    KVF --> KVB
-    KVF --> KVC
-    DISP --> KVF
-    DRONE --> KVF
-    DRONE --> RABBIT
-    DISP --> RABBIT
+    %% Traffico esterno
+    ORDERGEN -->|"HTTP REST"| LB
+    LB -->|"HTTP proxy → http://gateway:8000"| GW1
+    LB -->|"HTTP proxy → http://gateway:8000"| GW2
+    LB -->|"HTTP proxy → http://gateway:8000"| GW3
+
+    %% Gateway <-> KVFront
+    GW1 -->|"HTTP JSON GET/PUT/CAS"| KVF
+    GW2 -->|"HTTP JSON GET/PUT/CAS"| KVF
+    GW3 -->|"HTTP JSON GET/PUT/CAS"| KVF
+
+    %% Gateway <-> Broker
+    GW1 -->|"AMQP publish: delivery_requests"| RABBIT
+    GW2 -->|"AMQP publish: delivery_requests"| RABBIT
+    GW3 -->|"AMQP publish: delivery_requests"| RABBIT
+    RABBIT -->|"AMQP consume: delivery_status"| GW1
+    RABBIT -->|"AMQP consume: delivery_status"| GW2
+    RABBIT -->|"AMQP consume: delivery_status"| GW3
+
+    %% Dispatcher <-> KVFront
+    DISP -->|"HTTP JSON GET/PUT/CAS + /lock"| KVF
+
+    %% Dispatcher <-> Broker
+    RABBIT -->|"AMQP consume: delivery_requests"| DISP
+    RABBIT -->|"AMQP consume: drone_updates"| DISP
+    DISP -->|"AMQP publish: delivery_status"| RABBIT
+
+    %% Droni
+    DRONE -->|"HTTP JSON GET/PUT/CAS"| KVF
+    DRONE -->|"AMQP publish: drone_updates"| RABBIT
+
+    %% Repliche KV
+    KVF -->|"HTTP JSON replication (RF=2, LWW, read-repair, hints)"| KVA
+    KVF -->|"HTTP JSON replication (RF=2, LWW, read-repair, hints)"| KVB
+    KVF -->|"HTTP JSON replication (RF=2, LWW, read-repair, hints)"| KVC
+
 ```
 #### 3.6.3 Sequence Diagram 
 
