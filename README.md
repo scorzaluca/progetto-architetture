@@ -230,9 +230,9 @@ graph LR
 
     %% Flussi esterni
     Client -->|"HTTP REST"| LB
-    LB -->|"HTTP proxy (round-robin via Docker DNS, keep-alive, rate-limit opz.")| GW1
-    LB -->|"HTTP proxy (round-robin via Docker DNS, keep-alive, rate-limit opz.")| GW2
-    LB -->|"HTTP proxy (round-robin via Docker DNS, keep-alive, rate-limit opz.")| GW3
+    LB -->|"HTTP proxy (round-robin via Docker DNS, keep-alive, rate-limit opz.)"| GW1
+    LB -->|"HTTP proxy (round-robin via Docker DNS, keep-alive, rate-limit opz.)"| GW2
+    LB -->|"HTTP proxy (round-robin via Docker DNS, keep-alive, rate-limit opz.)"| GW3
 
     %% Gateway <-> KVFront
     GW1 -->|"HTTP JSON GET/PUT/CAS"| KVF
