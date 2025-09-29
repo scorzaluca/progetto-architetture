@@ -494,11 +494,11 @@ Suite che porta su uno **stack minimo** (`rabbitmq`, `kvstore_a/b/c`, `kvfront`,
 4) **/dashboard static (best-effort)**  
    - **Verifica**: se `dashboard.html` esiste → `200`; altrimenti `404` chiaro. (Sanity check non bloccante).
 
-5) **a.LB passthrough /zones + Content-Type**  
+5) **LB passthrough /zones + Content-Type**  
    - `GET /zones` via LB.  
    - **Verifica**: `200`, body JSON valido, header `Content-Type` corretto → LB non altera semantica.
 
-5) **b.Distribuzione tra repliche (best-effort) con ordergen**  
+5) **Distribuzione tra repliche (best-effort) con ordergen**  
    -Con più istanze gateway, verifichiamo che ≥2 istanze ricevano richieste.
 
 6) **Rate limiter globale (opzionale)**  
@@ -538,11 +538,11 @@ Avvia esclusivamente `kvfront` + `kvstore_a/b/c` e testa i **meccanismi di stora
    - Dopo un PUT, esattamente **2** repliche contengono la chiave.  
    - **Verifica**: rispetto del **replication factor**.
 
-6) **a Lock acquire/release**  
+6) **Lock acquire/release**  
    - Acquire → OK; Acquire ripetuto → KO; Release → OK; Acquire di nuovo → OK.  
    - **Verifica**: se la logica dei lock funziona correttamente
 
-6) **b Lock TTL**  
+6) **Lock TTL**  
    - Acquire con `ttl_sec`; secondo acquire fallisce; dopo scadenza **riesce**.  
    - **Verifica**: **expire automatico** dei lock.
 
