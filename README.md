@@ -434,70 +434,15 @@ Il PoC dimostra un **sistema distribuito funzionante** in cui:
 - L’architettura è containerizzata, scalabile e osservabile tramite dashboard e script di test.
 
 
+## 5. Test
 
-
-
-
-
-## 6. Test
-
-### 6.1 Unit test
-
-Per i componenti critici sono stati realizzati dei **unit test** che isolano la logica principale in versioni semplificate (“slice”), senza dipendenze esterne come FastAPI o httpx.  
-Questi test verificano che la parte algoritmica funzioni correttamente e in maniera deterministica.
-
----
-
-#### 6.1.1 KVFront (replica set)
-
-File principali:
-- `kvfront_slice.py`: implementa `_h()` e `replica_set_for()` come nello `kvfront` reale.
-- `test_kvfront_replica_set.py`: contiene i casi di test.
-
-**Casi testati**
-- **Basic**: le repliche scelte sono esattamente `rf`, tutte valide.  
-- **Consecutività**: i backend selezionati devono essere consecutivi sull’anello hash.  
-- **Wraparound**: quando la selezione parte dall’ultimo backend, la replica successiva è il primo.  
-- **Clipping RF**: se `rf > len(backends)`, viene ridotto a `len(backends)`.  
-- **Determinismo**: a parità di chiave e backends, il risultato è sempre lo stesso.  
-- **Nessun backend**: se la lista è vuota, viene restituito `[]`.
-
----
-
-#### 6.1.2 LB (token bucket)
-
-File principali:
-- `lb_bucket_slice.py`: implementa `refill()`, `take()`, `retry_after()`.
-- `test_lb_token_bucket.py`: contiene i casi di test.
-
-**Casi testati**
-- **Refill**: aggiunta di token proporzionale al tempo trascorso, con limite massimo a `burst`.  
-- **Take**: consumo di token se disponibili, altrimenti fallisce.  
-- **Retry-after**: calcolato come tempo minimo per poter soddisfare una richiesta (almeno 1s).  
-- **Rate zero**: quando `rate <= 0`, `retry_after()` restituisce sempre 1.  
-- **Cap**: anche dopo refill prolungato, i token non superano mai `burst`.
-
----
-
-#### 6.1.3 Esecuzione dei test unitari
-
-Dalla root del progetto:
-
-```bash
-pytest tests/tests_unit -q
-```
-
-
-
-
-
-## 6.2 Test — cosa verificano e come sono organizzati
+## 5.1 Test — cosa verificano e come sono organizzati
 
 Questa sezione spiega **cosa fanno** i test inclusi nella cartella `tests/`, come sono strutturati e quali aspetti del sistema validano. Tutti gli script usano `lib.sh` per funzioni comuni (HTTP/KV helper, CAS, lock, healthcheck, utility per droni e consegne).
 
 ---
 
-### Panoramica file
+### File per test di integrazione 
 
 - **`lib.sh`**  
   Helper condivisi:  
@@ -509,15 +454,18 @@ Questa sezione spiega **cosa fanno** i test inclusi nella cartella `tests/`, com
 - **`close_open_deliveries.sh`**  
   Script “di servizio” che chiude **tutte** le delivery non ancora `delivered`.  
   - **Cosa testa/garantisce**: consistenza delle CAS sul documento `delivery:*`, pulizia campi (`route/legs/path/eta/...`), e rilascio drone assegnato (CAS su `drone:*`).  
-  - **Uso tipico**: riportare l’ambiente in stato “pulito” tra run diverse.
+  - **Uso tipico**: riportare l’ambiente in stato “pulito” tra run di diversi scenari.
 
 - **`run_tests.sh`**  
-  Avvia lo **scenario completo** di demo: stack con `gateway x3`, `lb`, `kv*`, `dispatcher`, `drone`; applica **override flotta** e un **piano di consegne**; stampa l’URL della **dashboard** e mostra **log live** del dispatcher relativi al charging.  
-  - **Cosa valida**: integrazione end-to-end del sistema in condizioni realistiche (creazione/assegnazione/avanzamento consegne, movimenti droni, visualizzazione in dashboard).
+  Avvia lo **scenario completo** di prova: stack con `gateway x3`, `lb`, `kv*`, `dispatcher`, `drone`; applica **override flotta** e un **piano di consegne**; stampa l’URL della **dashboard** e mostra **log live** del dispatcher relativi al charging.  
+  - **Cosa valida**: integrazione end-to-end del sistema in condizioni realistiche, permettendo di settare uno scenario di droni-consegne (creazione/assegnazione/avanzamento consegne, movimenti droni, visualizzazione in dashboard).
 
 - **`reset_fleet.sh`**  
   Reset “di emergenza” della flotta: tutti i droni `inactive` con `battery=100`.  
   - **Cosa garantisce**: uno stato di partenza noto per i test o per ripetere la demo.
+
+
+Questi strumenti consentono di riprodurre **scenari end-to-end di consegna** con una flotta di droni simulata, osservando su dashboard  il comportamento reale del dispatcher, dei gateway e dei droni.
 
 ---
 
@@ -546,12 +494,12 @@ Suite che porta su uno **stack minimo** (`rabbitmq`, `kvstore_a/b/c`, `kvfront`,
 4) **/dashboard static (best-effort)**  
    - **Verifica**: se `dashboard.html` esiste → `200`; altrimenti `404` chiaro. (Sanity check non bloccante).
 
-5) **LB passthrough /zones + Content-Type**  
+5) **a.LB passthrough /zones + Content-Type**  
    - `GET /zones` via LB.  
    - **Verifica**: `200`, body JSON valido, header `Content-Type` corretto → LB non altera semantica.
 
-5c) **Distribuzione tra repliche (best-effort) con ordergen**  
-   -Con più istanze gateway, verifichiamo che ≥2 istanze ricevano richieste (distribuzione best-effort). La ripartizione potrebbe non essere perfettamente uniforme.
+5) **b.Distribuzione tra repliche (best-effort) con ordergen**  
+   -Con più istanze gateway, verifichiamo che ≥2 istanze ricevano richieste.
 
 6) **Rate limiter globale (opzionale)**  
    - Se `RL_GLOBAL_RATE/BURST>0`, invia un **burst** di POST `/deliveries`.  
@@ -590,13 +538,13 @@ Avvia esclusivamente `kvfront` + `kvstore_a/b/c` e testa i **meccanismi di stora
    - Dopo un PUT, esattamente **2** repliche contengono la chiave.  
    - **Verifica**: rispetto del **replication factor**.
 
-6) **Lock acquire/release**  
+6) **a.Lock acquire/release**  
    - Acquire → OK; Acquire ripetuto → KO; Release → OK; Acquire di nuovo → OK.  
-   - **Verifica**: semantica **mutua esclusione** via front.
+   - **Verifica**: se la logica dei lock funziona correttamente
 
-6b) **Lock TTL**  
+6) **b.Lock TTL**  
    - Acquire con `ttl_sec`; secondo acquire fallisce; dopo scadenza **riesce**.  
-   - **Verifica**: **expiry automatico** dei lock.
+   - **Verifica**: **expire automatico** dei lock.
 
 7) **Consistent hashing (stabilità)**  
    - Scrive una chiave “stabile” e mostra su quali backend risiede.  
@@ -604,7 +552,7 @@ Avvia esclusivamente `kvfront` + `kvstore_a/b/c` e testa i **meccanismi di stora
 
 8) **Cache LRU (smoke)**  
    - Scrive molte chiavi e simula letture random.  
-   - **Verifica**: assenza errori → cache LRU operativa (test di fumo).
+   - **Verifica**: assenza errori → cache LRU operativa
 
 9) **Resilienza al riavvio**  
    - Dopo una scrittura, riavvia un backend.  
@@ -614,103 +562,39 @@ Avvia esclusivamente `kvfront` + `kvstore_a/b/c` e testa i **meccanismi di stora
 
 
 
-### Cosa consideriamo “OK”
+### Risultati
 
 - Gli script riportano, per ogni step, righe **`PASS: ...`**;  
   a fine suite: **`Tutti i test GL completati ✔`** o **`Tutti i test KV completati ✔`**.  
-- Messaggi **`SKIP`**/**`WARN`** sono attesi quando alcune feature sono volutamente disattive (es. rate-limit OFF) **o quando si osserva una distribuzione non perfettamente uniforme tra le repliche del gateway (best-effort)**.
+- Messaggi **`SKIP`**/**`WARN`** sono attesi quando alcune feature sono volutamente disattive.
 - In presenza di **`FAIL`**, c’è tipicamente un problema di **config/ambiente** (container non pronti, porte occupate) oppure una **regressione** nella logica testata (CAS, LWW, proxy LB, ecc.).
 
 > Nota: per testare solitamente basta **scommentare** nel `main()` della suite i test che si vogliono eseguire.
 
 
 
+## 6. Deployment & Run
 
-## 6.2 Test di integrazione
+Questa sezione descrive come avviare il Proof-of-Concept **DroneDispatch** in locale.
 
-Oltre agli unit test, il progetto include una serie di **test di integrazione** che verificano il comportamento del sistema distribuito nei suoi componenti principali (KVStore/KVFront, Gateway/LB) e che permettono anche di simulare scenari reali di consegna con droni.
+### 6.1 Requisiti
+- **Docker** e **docker-compose** installati.
+- Nessun servizio in ascolto sulle porte usate dal PoC (8080, 9000, 8000, 5672, 15672).
 
-Tutti i test di integrazione si appoggiano al file **`lib.sh`**, che contiene funzioni helper riutilizzate dai servizi reali (`kv_get`, `kv_cas`, `api_post_delivery`, lock, healthcheck, gestione droni e consegne). In questo modo i test validano il sistema con le stesse primitive effettivamente usate in produzione.
+### 6.2 Avvio rapido
 
----
+È disponibile lo script [`start.sh`](./start.sh) che automatizza i passi principali:
 
-### Panoramica file
+```bash
+./start.sh
+```
 
-- **`lib.sh`**  
-  Helper condivisi:  
-  - `api_get`, `api_post_delivery` (HTTP su LB/Gateway)  
-  - `kv_get`, `kv_put_obj`, `kv_cas` (operazioni su KV via `kvfront`)  
-  - funzioni per **lock**, **readiness**, **random point** in zone, **override droni**, **piano consegne**  
-  - **cleanup** (es. `force_finish_all_open_deliveries_strict`) che forza a `delivered` tutte le consegne aperte (CAS + reset campi viaggio + rilascio drone).
+### 6.3 Spegnimento
+Per fermare il PoC e rimuovere i volumi persistenti:
 
-- **`close_open_deliveries.sh`**  
-  Script “di servizio” che chiude **tutte** le delivery non ancora `delivered`.  
-  - **Cosa testa/garantisce**: consistenza delle CAS sul documento `delivery:*`, pulizia campi (`route/legs/path/eta/...`), e rilascio drone assegnato (CAS su `drone:*`).  
-  - **Uso tipico**: riportare l’ambiente in stato “pulito” tra run diverse.
 
-- **`run_tests.sh`**  
-  Avvia lo **scenario completo** di demo: stack con `gateway x3`, `lb`, `kv*`, `dispatcher`, `drone`; applica **override flotta** e un **piano di consegne**; stampa l’URL della **dashboard** e mostra **log live** del dispatcher relativi al charging.  
-  - **Cosa valida**: integrazione end-to-end del sistema in condizioni realistiche (creazione/assegnazione/avanzamento consegne, movimenti droni, visualizzazione in dashboard).
+```bash
+docker compose down -v
+```
 
-- **`reset_fleet.sh`**  
-  Reset “di emergenza” della flotta: tutti i droni `inactive` con `battery=100`.  
-  - **Cosa garantisce**: uno stato di partenza noto per i test o per ripetere la demo.
 
----
-
-### `kv_tests.sh` — KV-only (replica, consistenza, resilienza)
-
-Avvia esclusivamente `kvfront` + `kvstore_a/b/c` e testa i **meccanismi di storage** senza il resto dei servizi.
-
-**Test inclusi (attivabili nel `main`)**:
-
-1. **PUT/GET + LWW (Last-Write-Wins)**  
-2. **CAS (success/fail/race)**  
-3. **Read-repair**  
-4. **Hinted-Handoff**  
-5. **Replica factor (RF=2)**  
-6. **Lock acquire/release + TTL**  
-7. **Consistent hashing (stabilità)**  
-8. **Cache LRU (smoke test)**  
-9. **Resilienza al riavvio**
-
----
-
-### `gl_tests.sh` — Gateway + LB (end-to-end)
-
-Suite che porta su uno **stack minimo** (`rabbitmq`, `kvstore_a/b/c`, `kvfront`, `gateway`, `lb`) e verifica le funzionalità **esterno→interno**. Opzioni:
-- `--reuse` non riavvia i servizi
-- `--with-ordergen` include test di traffico sintetico
-- `--rr` (efficace solo con il test 5c abilitato) prepara lo scenario di distribuzione: scala gateway a 3 istanze e avvia ordergen_bursty, quindi osserva per ~60s i log per verificare una distribuzione best-effort del traffico tra le repliche (il LB non fa round-robin esplicito).
-
-**Test inclusi (attivabili nel `main`)**:
-
-1. **/health + /zones bootstrap**  
-2. **POST /deliveries + Idempotency-Key**  
-3. **Listing /deliveries (ordine + limit)**  
-4. **/dashboard static (best-effort)**  
-5. **LB passthrough /zones + Content-Type**  
-6. **Round-robin reale su più gateway (con ordergen)**  
-7. **Rate limiter globale (opzionale)**  
-8. **Ordergen smoke (opzionale)**
-
----
-
-### Scenari reali di consegna
-
-Oltre alle suite predefinite, è possibile simulare scenari completi di consegna utilizzando i seguenti script:
-
-- **`run_tests.sh`** → scenario completo con override flotta e piano consegne  
-- **`reset_fleet.sh`** → reset droni a `inactive` e `battery=100`  
-- **`close_open_deliveries.sh`** → forza chiusura consegne aperte e libera droni  
-- **`lib.sh`** → usabile anche interattivamente per override, nuove consegne, pulizia stato
-
-Questi strumenti consentono di riprodurre **scenari end-to-end di consegna** con una flotta di droni simulata, osservando su dashboard e log il comportamento reale del dispatcher, dei gateway e dei droni.
-
----
-
-### Cosa consideriamo “OK”
-
-- Output finale delle suite con messaggi **`PASS`** e riepilogo positivo  
-- Eventuali **`SKIP`/`WARN`** sono attesi in scenari opzionali (es. rate-limit disattivato)  
-- Nessun **`FAIL`** o `ERROR` durante l’esecuzione
