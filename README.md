@@ -230,9 +230,9 @@ graph LR
 
     %% Flussi esterni
     Client -->|"HTTP REST"| LB
-    LB -->|"HTTP proxy (round-robin via Docker DNS, keep-alive, rate-limit opz.)| GW1
-    LB -->|"HTTP proxy (round-robin via Docker DNS, keep-alive, rate-limit opz.)| GW2
-    LB -->|"HTTP proxy (round-robin via Docker DNS, keep-alive, rate-limit opz.)| GW3
+    LB -->|"HTTP proxy (round-robin via Docker DNS, keep-alive, rate-limit opz.")| GW1
+    LB -->|"HTTP proxy (round-robin via Docker DNS, keep-alive, rate-limit opz.")| GW2
+    LB -->|"HTTP proxy (round-robin via Docker DNS, keep-alive, rate-limit opz.")| GW3
 
     %% Gateway <-> KVFront
     GW1 -->|"HTTP JSON GET/PUT/CAS"| KVF
@@ -412,8 +412,7 @@ Il percorso di sviluppo del Proof of Concept (PoC) è stato organizzato in **mil
    - Integrazione con lock distribuiti e CAS doppi per consistenza.
 
 8. **Test end-to-end e osservabilità**
-   - Script `tests/` per verificare la correttezza dei flussi.
-   - `slo_watch.sh` per osservabilità passiva di SLO (latenza media assegnazione e consegna).
+   - Script `tests/` per verificare la correttezza dei flussi e delle operazioni.
    - Validazione finale con flotta simulata e traffico generato.
 
 ### 4.2 Strategia seguita
@@ -427,57 +426,16 @@ Questo ha permesso di validare ogni componente separatamente e poi integrarlo gr
 
 ---
 
-
-
-## 5. Sviluppo del Proof of Concept (PoC)
-
-Il Proof of Concept realizzato implementa in modo funzionante e verificabile i requisiti minimi previsti dalla traccia.  
-
-### 5.1 Funzionalità implementate
-
-- **Registrazione dei droni simulati**
-  - Il servizio `drone_sim` registra automaticamente una flotta di droni all’avvio (`drone:ID` e `drones_index` nel KV).
-  - Ogni drone ha attributi: `id`, `type` (light/medium/heavy), `battery`, `pos`, `status`, `speed`.
-
-- **Ricezione richieste di consegna**
-  - Il servizio `gateway` espone un endpoint REST `/deliveries` che permette l’inserimento di nuove consegne.
-  - Le richieste vengono salvate nel `kvfront` e propagate ai `kvstore`.
-
-- **Algoritmo di assegnazione**
-  - Il `dispatcher` riceve eventi (`delivery_requests`, `drone_updates`) e decide quale drone assegnare in base a:
-    - idoneità per peso pacco,
-    - livello di batteria sufficiente per la missione,
-    - distanza da origine/destinazione.
-  - Assegnazione realizzata con **lock distribuiti** e **CAS doppi** per garantire consistenza tra stato drone e stato consegna.
-
-- **Simulazione aggiornamenti droni**
-  - Ogni drone aggiorna periodicamente posizione e batteria con step frazionali (fluido sulla dashboard).
-  - Stato salvato in KV con **CAS + retry** per evitare sovrascritture concorrenti.
-  - Eventi su `drone_updates` vengono pubblicati su RabbitMQ e consumati dal `dispatcher`.
-
-- **Tracciamento stato consegne**
-  - Le consegne passano da `pending` → `assigned` → `in-flight` → `delivered`.
-  - Lo stato è mantenuto nel KV store, leggibile via API.
-
-- **Endpoint per stato droni e consegne**
-  - Il `gateway` espone API REST per consultare lo stato corrente (sia droni che consegne).
-  - La **dashboard web** legge questi endpoint e visualizza i dati su mappa e tabella.
-
-### 5.2 Tecnologie del PoC
-Il PoC integra tecnologie e concetti seguenti:
-- **API REST** (FastAPI, HTTP/JSON).
-- **Sistemi a broker** (RabbitMQ, code AMQP per richieste ed eventi).
-- **Key-Value store distribuito** (replica e coordinamento KV con consistency best-effort).
-- **Container e orchestrazione** (`Docker`, `docker-compose`, scaling del gateway).
-- **Meccanismi di consistenza** (CAS, lock distribuiti).
-- **Bilanciamento del carico** (proxy lb + rate limiter; distribuzione best-effort via service discovery Docker)).
-
-### 5.3 Risultato
+### 4.3 Risultato
 Il PoC dimostra un **sistema distribuito funzionante** in cui:
 - I droni vengono gestiti e monitorati in tempo reale.
 - Le consegne vengono ricevute, assegnate e tracciate correttamente.
 - Tutte le interazioni avvengono tramite interfacce standard (API REST, AMQP).
 - L’architettura è containerizzata, scalabile e osservabile tramite dashboard e script di test.
+
+
+
+
 
 
 
