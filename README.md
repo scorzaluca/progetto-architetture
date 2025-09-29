@@ -538,11 +538,11 @@ Avvia esclusivamente `kvfront` + `kvstore_a/b/c` e testa i **meccanismi di stora
    - Dopo un PUT, esattamente **2** repliche contengono la chiave.  
    - **Verifica**: rispetto del **replication factor**.
 
-6) **a.Lock acquire/release**  
+6) **a Lock acquire/release**  
    - Acquire → OK; Acquire ripetuto → KO; Release → OK; Acquire di nuovo → OK.  
    - **Verifica**: se la logica dei lock funziona correttamente
 
-6) **b.Lock TTL**  
+6) **b Lock TTL**  
    - Acquire con `ttl_sec`; secondo acquire fallisce; dopo scadenza **riesce**.  
    - **Verifica**: **expire automatico** dei lock.
 
