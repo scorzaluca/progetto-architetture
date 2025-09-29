@@ -202,12 +202,12 @@ Ogni kvstore non viene usato direttamente dal client, ma risponde a richieste ch
 graph LR
     Client((OrderGen))
 
-    subgraph Frontend
+    
         LB[LB — FastAPI proxy]
         GW1[Gateway #1]
         GW2[Gateway #2]
         GW3[Gateway #3]
-    end
+    
 
     subgraph Control
         DISP[Dispatcher]
@@ -230,9 +230,9 @@ graph LR
 
     %% Flussi esterni
     Client -->|"HTTP REST"| LB
-    LB -->|"HTTP proxy → service 'gateway' (Docker DNS), best-effort"| GW1
-    LB -->|"HTTP proxy → service 'gateway' (Docker DNS), best-effort"| GW2
-    LB -->|"HTTP proxy → service 'gateway' (Docker DNS), best-effort"| GW3
+    LB -->|"HTTP proxy (round-robin via Docker DNS, keep-alive, rate-limit opz.)| GW1
+    LB -->|"HTTP proxy (round-robin via Docker DNS, keep-alive, rate-limit opz.)| GW2
+    LB -->|"HTTP proxy (round-robin via Docker DNS, keep-alive, rate-limit opz.)| GW3
 
     %% Gateway <-> KVFront
     GW1 -->|"HTTP JSON GET/PUT/CAS"| KVF
@@ -260,9 +260,9 @@ graph LR
     DRONE -->|"AMQP publish drone_updates"| RMQ
 
     %% KVFront -> repliche
-    KVF -->|"HTTP JSON replication (RF=2, RR, HH)"| KVA
-    KVF -->|"HTTP JSON replication (RF=2, RR, HH)"| KVB
-    KVF -->|"HTTP JSON replication (RF=2, RR, HH)"| KVC
+    KVF -->|"HTTP JSON replication (RF=2, LWW, Read-Repair, Hinted-Handoff)"| KVA
+    KVF -->|"HTTP JSON replication (RF=2, LWW, Read-Repair, Hinted-Handoff)"| KVB
+    KVF -->|"HTTP JSON replication (RF=2, LWW, Read-Repair, Hinted-Handoff)"| KVC
 
 
 
@@ -280,8 +280,8 @@ graph LR
 | **LB**          | 8080          | 8080                     | HTTP REST                          |
 | **Gateway #1-3**| 8000          | — (dietro LB)            | HTTP REST + AMQP client            |
 | **KVFront**     | 9000          | 9000                     | HTTP JSON                          |
-| **KVStore A/B/C**| 9000         | 9000 (diversi container) | HTTP JSON                          |
-| **Dispatcher**  | 8000 (FastAPI)| 8000                     | HTTP JSON + AMQP                   |
+| **KVStore A/B/C**| 9000         | 9001/9002/9003 (diversi container) | HTTP JSON                          |
+| **Dispatcher**  | —             | —                        | HTTP JSON + AMQP                   |
 | **Drone_sim**   | —             | —                        | HTTP JSON (client) + AMQP          |
 | **OrderGen**    | —             | —                        | HTTP REST (client)                 |
 | **RabbitMQ**    | 5672 / 15672  | 5672 / 15672             | AMQP (5672) / Mgmt UI (15672, opz.)|
@@ -294,7 +294,7 @@ graph LR
 
 ```mermaid
 sequenceDiagram
-    participant Client
+    participant Ordergen
     participant LB as LB
     participant GW as Gateway
     participant KVF as KVFront
@@ -303,13 +303,13 @@ sequenceDiagram
     participant DRN as Drone_sim
 
     %% Creazione delivery
-    Client->>LB: POST /deliveries
+    Ordergen->>LB: POST /deliveries
     LB->>GW: Forward request
     GW->>KVF: Store delivery in KV
     KVF-->>GW: OK
     GW->>RMQ: Publish delivery_requests
     GW-->>LB: 201 Created (id)
-    LB-->>Client: Response (id)
+    LB-->>Ordergen: Response (id)
 
     %% Assegnazione tramite evento
     RMQ-->>DISP: Consume delivery_requests
@@ -333,7 +333,7 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Client
+    participant Ordergen
     participant LB as LB
     participant GW as Gateway
     participant KVF as KVFront
@@ -342,12 +342,12 @@ sequenceDiagram
     participant RMQ as RabbitMQ
 
     %% Creazione delivery
-    Client->>LB: POST /deliveries
+    Ordergen->>LB: POST /deliveries
     LB->>GW: Forward request
     GW->>KVF: Store delivery in KV
     KVF-->>GW: OK
     GW-->>LB: 201 Created (id)
-    LB-->>Client: Response (id)
+    LB-->>Ordergen: Response (id)
 
     %% Assegnazione tramite polling
     loop Periodic assign_round
