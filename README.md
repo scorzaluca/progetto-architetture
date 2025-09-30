@@ -1,5 +1,8 @@
 # DroneDispatch — Sistema Distribuito per la Gestione di una Flotta di Droni (PoC)
 
+> **Link Presentazione Canvas**: https://www.canva.com/design/DAGt4jRCPEM/9r9oxmIT-ge3_p5oZ4IfYA/edit?utm_content=DAGt4jRCPEM&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton
+
+
 > **Stato**: Proof of Concept funzionante, progettato per dimostrare architetture distribuite (microservizi, broker di messaggi, key-value store replicato, bilanciamento, consistenza, caching, container).
 
 
